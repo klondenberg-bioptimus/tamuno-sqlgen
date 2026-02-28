@@ -7,6 +7,20 @@ from enum import Enum, auto
 
 
 class TokenType(Enum):
+    """Token types produced by the scanner.
+
+    Attributes:
+        LITERAL: Plain text.
+        OPEN_BRACKET: Opening optional bracket ``[``.
+        CLOSE_BRACKET: Closing optional bracket ``]``.
+        REQUIRED_OPEN_BRACKET: Opening required bracket ``{``.
+        REQUIRED_CLOSE_BRACKET: Closing required bracket ``}``.
+        ESCAPED_VAR: Escaped input variable ``$name[:type]``.
+        LITERAL_VAR: Literal input variable ``#name[:type]``.
+        TARGET_VAR: Output/result variable ``@name[:type]``.
+        OPTION_VAR: Option variable ``?name[:type]``.
+    """
+
     LITERAL = auto()
     OPEN_BRACKET = auto()
     CLOSE_BRACKET = auto()
@@ -20,6 +34,15 @@ class TokenType(Enum):
 
 @dataclass(slots=True)
 class Token:
+    """A single token produced by the scanner.
+
+    Attributes:
+        type: The token type.
+        value: The token value (identifier name for variables, text for
+            literals, bracket character for brackets).
+        vartype: The DSL type name for variable tokens (default ``"String"``).
+    """
+
     type: TokenType
     value: str
     vartype: str = "String"
@@ -39,13 +62,32 @@ _VAR_PREFIX: dict[str, TokenType] = {
 
 
 class ScannerError(Exception):
+    """Error raised when the scanner encounters invalid input."""
+
     def __init__(self, pos: int, message: str) -> None:
+        """Initialize a ScannerError.
+
+        Args:
+            pos: Character position in the source where the error occurred.
+            message: Human-readable description of the error.
+        """
         super().__init__(f"Position {pos}: {message}")
         self.pos = pos
 
 
 def scan(source: str) -> list[Token]:
-    """Tokenize a SQL template string into a list of Tokens."""
+    """Tokenize a SQL template string into a list of Tokens.
+
+    Args:
+        source: The SQL template string to tokenize.
+
+    Returns:
+        A list of Token objects representing the parsed template.
+
+    Raises:
+        ScannerError: If the source contains invalid syntax such as
+            mismatched brackets or missing variable identifiers.
+    """
     tokens: list[Token] = []
     bracket_stack: list[TokenType] = []
     pos = 0

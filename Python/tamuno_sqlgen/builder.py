@@ -8,7 +8,17 @@ from .dialect import SQLDialect
 
 
 class SQLBuilder:
-    """Builds a SQL string from a parsed template and a dict of parameter values."""
+    """Builds a SQL string from a parsed template and a dict of parameter values.
+
+    Evaluates the expression tree, including optional/alternative/combiner
+    logic, and substitutes parameter values using the configured dialect.
+
+    Attributes:
+        tokens: List of scanned tokens from the parser.
+        expressions: Expression tree nodes (root at index 0).
+        input_vars: Ordered list of input variable tokens.
+        dialect: SQL dialect used for value escaping.
+    """
 
     def __init__(
         self,
@@ -17,6 +27,15 @@ class SQLBuilder:
         input_vars: list[Token],
         dialect: SQLDialect | None = None,
     ) -> None:
+        """Initialize the SQL builder.
+
+        Args:
+            tokens: List of scanned tokens from the parser.
+            expressions: Expression tree nodes (root at index 0).
+            input_vars: Ordered list of input variable tokens.
+            dialect: SQL dialect to use for escaping. Defaults to
+                :class:`SQLDialect` (ANSI standard).
+        """
         self.tokens = tokens
         self.expressions = expressions
         self.input_vars = input_vars
@@ -24,7 +43,18 @@ class SQLBuilder:
 
     # ------------------------------------------------------------------
     def build(self, params: dict) -> str:
-        """Build and return the SQL string for the given parameter dict."""
+        """Build and return the SQL string for the given parameters.
+
+        Args:
+            params: Mapping of parameter names to values. Parameters set
+                to ``None`` are treated as absent.
+
+        Returns:
+            The fully constructed SQL string.
+
+        Raises:
+            ValueError: If required (non-optional) parameters are missing.
+        """
         available = self._calc_available(params)
         root = self.expressions[0]
 
