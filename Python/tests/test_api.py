@@ -127,7 +127,7 @@ def test_api_query_all_users(sample_source, sqlite_conn):
     params = api.selectUser()
     df = params.query(sqlite_conn)
     # selectUser has LIMIT 1 so returns at most 1 row
-    assert len(df) <= 3  # just verify it returns a DataFrame without error
+    assert len(df) <= 1  # selectUser has LIMIT 1
 
 
 def test_api_query_column_names(sample_source, sqlite_conn):
