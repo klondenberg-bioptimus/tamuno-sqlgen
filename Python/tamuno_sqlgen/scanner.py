@@ -25,7 +25,6 @@ class Token:
     vartype: str = "String"
 
 
-_STOP_CHARS = frozenset("[]{}$#@?\"'\\ ")
 _STOP_CHARS = frozenset("[]{}$#@?\"'\\")
 _IDENT_CHARS = frozenset(
     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
@@ -62,11 +61,11 @@ def scan(source: str) -> list[Token]:
     while pos < length:
         ch = source[pos]
 
-        # Escape character
+        # Escape character - advance by 2, appending the literal next char
         if ch == "\\":
-            if in_quote:
-                buf.append("\\")
             if pos + 1 < length:
+                if in_quote:
+                    buf.append("\\")
                 buf.append(source[pos + 1])
             pos += 2
             continue
