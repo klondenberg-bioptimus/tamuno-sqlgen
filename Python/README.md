@@ -1,6 +1,6 @@
 # tamuno-sqlgen Python
 
-A Python port of the [tamuno-sqlgen](../sqlgen/) Java SQL template engine. It parses a custom SQL template DSL and provides a Pythonic API for type-safe SQL generation, execution, and code generation.
+A Python port of the [tamuno-sqlgen](../Java/sqlgen/) Java SQL template engine. It parses a custom SQL template DSL and provides a Pythonic API for type-safe SQL generation, execution, and code generation.
 
 ## Overview
 
