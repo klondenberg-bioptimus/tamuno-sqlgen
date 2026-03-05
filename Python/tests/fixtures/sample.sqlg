@@ -1,0 +1,22 @@
+selectUserLogin:=
+    SELECT @user_id:int, @user_name:String, @birthdate:Date 
+        FROM users 
+        WHERE 
+            user_name=$user_name AND password_hash=$password 
+        LIMIT 1;
+
+selectUser:=
+    SELECT @user_id:int, @user_name:String, @birthdate:Date 
+        FROM users 
+            [ WHERE 
+                [user_name=$user_name] [AND] [active=$active:int]
+            ] 
+        LIMIT 1;
+
+insertUser:=
+    INSERT INTO users (user_name, active) VALUES ($user_name, $active:int);
+
+updateUser:=
+    UPDATE users SET 
+        [user_name=$user_name] [,] [active=$active:int]
+    WHERE user_id=$user_id:int;
