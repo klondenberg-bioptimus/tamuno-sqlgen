@@ -317,6 +317,547 @@ api.insertUser(user_name="carol", active=1).execute(conn)
 print(api.selectUser().query(conn))
 ```
 
+## Advanced Examples
+
+The examples below demonstrate real-world usage patterns with multi-table JOINs, dynamic SQL, aggregations, pagination, and more.
+
+### Multi-table JOIN with dynamic filters
+
+A common pattern is searching across joined tables with any combination of optional filters:
+
+```sql
+-- orders.sqlg
+
+searchOrders:=
+    SELECT @order_id:int, @customer_name:String, @product_name:String,
+           @quantity:int, @unit_price:double, @order_date:Date
+        FROM orders o
+        JOIN customers c ON o.customer_id = c.customer_id
+        JOIN order_items oi ON o.order_id = oi.order_id
+        JOIN products p ON oi.product_id = p.product_id
+            [ WHERE
+                [c.customer_name=$customer_name]
+                [AND]
+                [p.category=$category]
+                [AND]
+                [o.order_date >= $date_from:Date]
+                [AND]
+                [o.order_date <= $date_to:Date]
+                [AND]
+                [o.status=$status]
+            ]
+        ORDER BY o.order_date DESC;
+```
+
+```python
+from tamuno_sqlgen import SQLGenApi
+
+api = SQLGenApi.from_file("orders.sqlg")
+
+# All orders — no WHERE clause generated
+df = api.search_orders().query(conn)
+
+# Filter by customer only
+df = api.search_orders(customer_name="Alice").query(conn)
+
+# Combine multiple filters — AND combiners appear automatically
+df = api.search_orders(
+    customer_name="Alice",
+    status="shipped",
+    date_from=date(2024, 1, 1),
+    date_to=date(2024, 12, 31),
+).query(conn)
+
+# Just inspect the SQL
+print(api.search_orders(category="Electronics").build_sql())
+# SELECT ... FROM orders o JOIN customers c ON ... JOIN ...
+#   WHERE p.category='Electronics' ORDER BY o.order_date DESC
+```
+
+### Aggregation with GROUP BY and optional HAVING
+
+Use optional sections in HAVING to create flexible reporting queries:
+
+```sql
+salesReport:=
+    SELECT @category:String, @total_revenue:double,
+           @order_count:int, @avg_price:double
+        FROM products p
+        JOIN order_items oi ON p.product_id = oi.product_id
+        JOIN orders o ON oi.order_id = o.order_id
+            [ WHERE
+                [o.order_date >= $date_from:Date]
+                [AND]
+                [o.order_date <= $date_to:Date]
+                [AND]
+                [o.status=$status]
+            ]
+        GROUP BY p.category
+            [ HAVING
+                [SUM(oi.quantity * oi.unit_price) >= $min_revenue:double]
+                [AND]
+                [COUNT(DISTINCT o.order_id) >= $min_orders:int]
+            ]
+        ORDER BY total_revenue DESC;
+```
+
+```python
+# Full report — no WHERE, no HAVING
+df = api.sales_report().query(conn)
+
+# Only shipped orders with minimum revenue threshold
+df = api.sales_report(
+    status="shipped",
+    min_revenue=1000.0,
+).query(conn)
+
+# Date range + minimum order count
+df = api.sales_report(
+    date_from=date(2024, 1, 1),
+    date_to=date(2024, 6, 30),
+    min_orders=5,
+).query(conn)
+```
+
+### Pagination with literal variables
+
+Literal variables (`#var`) inject raw values into SQL — useful for column names, sort directions, and pagination parameters that should not be quoted:
+
+```sql
+paginatedProducts:=
+    SELECT @product_id:int, @product_name:String, @category:String,
+           @price:double, @stock:int
+        FROM products
+            [ WHERE
+                [category=$category]
+                [AND]
+                [price >= $min_price:double]
+                [AND]
+                [price <= $max_price:double]
+                [AND]
+                [stock > $min_stock:int]
+            ]
+        ORDER BY #sort_column #sort_direction
+        LIMIT #page_size OFFSET #page_offset;
+```
+
+```python
+# Page 1, 20 items, sorted by price descending
+df = api.paginated_products(
+    sort_column="price",
+    sort_direction="DESC",
+    page_size="20",
+    page_offset="0",
+).query(conn)
+
+# Page 2 with category filter
+df = api.paginated_products(
+    category="Electronics",
+    sort_column="product_name",
+    sort_direction="ASC",
+    page_size="20",
+    page_offset="20",
+).query(conn)
+```
+
+### Dynamic UPDATE with optional SET fields
+
+When updating records, you often want to set only the fields that were provided. The `[,]` combiner handles comma placement automatically:
+
+```sql
+updateProduct:=
+    UPDATE products SET
+        [product_name=$product_name] [,]
+        [category=$category] [,]
+        [price=$price:double] [,]
+        [stock=$stock:int] [,]
+        [description=$description]
+    WHERE product_id=$product_id:int;
+```
+
+```python
+# Update only the price
+api.update_product(product_id=42, price=29.99).execute(conn)
+# → UPDATE products SET price=29.99 WHERE product_id=42
+
+# Update name and stock — comma appears between them
+api.update_product(
+    product_id=42,
+    product_name="Widget Pro",
+    stock=100,
+).execute(conn)
+# → UPDATE products SET product_name='Widget Pro' , stock=100
+#     WHERE product_id=42
+
+# Update everything
+api.update_product(
+    product_id=42,
+    product_name="Widget Pro",
+    category="Gadgets",
+    price=29.99,
+    stock=100,
+    description="The best widget",
+).execute(conn)
+```
+
+### INSERT from SELECT with dynamic target table
+
+Combine literal variables for table names with escaped variables for filters:
+
+```sql
+copyOrderItems:=
+    INSERT INTO #target_table (order_id, product_id, quantity, unit_price)
+        SELECT oi.order_id, oi.product_id, oi.quantity, oi.unit_price
+            FROM order_items oi
+            JOIN orders o ON oi.order_id = o.order_id
+            WHERE o.status=$status
+                [AND o.order_date >= $date_from:Date]
+                [AND o.order_date <= $date_to:Date];
+```
+
+```python
+# Copy shipped order items to an archive table
+api.copy_order_items(
+    target_table="archived_items",
+    status="shipped",
+    date_from=date(2023, 1, 1),
+    date_to=date(2023, 12, 31),
+).execute(conn)
+```
+
+### Stop-combiners for independent filter groups
+
+The `{}` stop-combiner resets the combiner state, allowing you to create independent groups of conditions where an `AND` only appears if the preceding condition *within the same group* was included:
+
+```sql
+advancedSearch:=
+    SELECT @id:int, @name:String, @category:String, @price:double
+        FROM products
+        [ WHERE
+            [name LIKE $name_pattern]
+            {}
+            [AND category=$category]
+            {}
+            [AND price >= $min_price:double]
+            [AND]
+            [price <= $max_price:double]
+        ];
+```
+
+```python
+# Only price range — the "AND" before category is independent,
+# so it appears even without name_pattern
+api.advanced_search(min_price=10.0, max_price=50.0).build_sql()
+# → SELECT ... FROM products WHERE AND price >= 10.0 AND price <= 50.0
+
+# Only category
+api.advanced_search(category="Books").build_sql()
+# → SELECT ... FROM products WHERE AND category='Books'
+
+# All filters
+api.advanced_search(
+    name_pattern="%widget%",
+    category="Electronics",
+    min_price=10.0,
+    max_price=100.0,
+).build_sql()
+```
+
+### Code generation for type-safe usage
+
+Generate Python source code from your templates for IDE autocompletion and type checking:
+
+```python
+from tamuno_sqlgen import PythonCodeGenerator
+
+gen = PythonCodeGenerator()
+gen.generate_file("orders.sqlg", "generated_orders.py", "orders_module")
+```
+
+The generated file contains dataclasses with typed fields and factory functions:
+
+```python
+# generated_orders.py (auto-generated)
+from dataclasses import dataclass
+from typing import Optional
+
+@dataclass
+class SearchordersParams:
+    customer_name: Optional[str] = None
+    category: Optional[str] = None
+    date_from: Optional[datetime.date] = None
+    date_to: Optional[datetime.date] = None
+    status: Optional[str] = None
+
+    def build_sql(self) -> str: ...
+    def to_sql(self) -> str: ...
+    def query(self, conn) -> pd.DataFrame: ...
+    def execute(self, conn) -> int: ...
+
+def searchOrders(**kwargs) -> SearchordersParams: ...
+```
+
+### Factory introspection
+
+Inspect the parsed metadata for a statement at runtime:
+
+```python
+api = SQLGenApi.from_file("orders.sqlg")
+factory = api.search_orders
+
+# Input variables (parameters the query accepts)
+for var in factory.input_vars:
+    print(f"  {var.value}: {var.vartype}")
+# customer_name: String
+# category: String
+# date_from: Date
+# date_to: Date
+# status: String
+
+# Output variables (columns returned)
+for var in factory.output_vars:
+    print(f"  {var.value}: {var.vartype}")
+# order_id: int
+# customer_name: String
+# product_name: String
+# quantity: int
+# unit_price: double
+# order_date: Date
+
+# All available statements
+print(api.statement_names)
+```
+
+## Using with SQLAlchemy
+
+tamuno-sqlgen generates raw SQL strings, which makes it easy to use with SQLAlchemy's `text()` and connection/engine API. This lets you combine tamuno-sqlgen's dynamic SQL templating with SQLAlchemy's connection management, transactions, and ORM ecosystem.
+
+### Setup
+
+Install SQLAlchemy alongside tamuno-sqlgen:
+
+```bash
+pip install sqlalchemy
+```
+
+### Basic usage with SQLAlchemy engine
+
+```python
+from sqlalchemy import create_engine, text
+from tamuno_sqlgen import SQLGenApi
+
+engine = create_engine("sqlite:///mydb.sqlite")
+api = SQLGenApi.from_file("orders.sqlg")
+
+# Build the SQL with tamuno-sqlgen, execute with SQLAlchemy
+sql = api.search_orders(customer_name="Alice", status="shipped").build_sql()
+
+with engine.connect() as conn:
+    result = conn.execute(text(sql))
+    rows = result.fetchall()
+    for row in rows:
+        print(row)
+```
+
+### Using pandas with SQLAlchemy engine
+
+Since `pandas.read_sql_query` accepts SQLAlchemy connections, you can use them directly with tamuno-sqlgen's `.query()` method:
+
+```python
+import pandas as pd
+from sqlalchemy import create_engine
+from tamuno_sqlgen import SQLGenApi
+
+engine = create_engine("postgresql://user:pass@localhost/mydb")
+api = SQLGenApi.from_file("orders.sqlg")
+
+# Option 1: Use tamuno-sqlgen's built-in query() with a SQLAlchemy connection
+with engine.connect() as conn:
+    df = api.search_orders(status="shipped").query(conn)
+    print(df)
+
+# Option 2: Build SQL manually and use pd.read_sql_query
+sql = api.search_orders(
+    date_from=date(2024, 1, 1),
+    date_to=date(2024, 6, 30),
+).build_sql()
+
+with engine.connect() as conn:
+    df = pd.read_sql_query(sql, conn)
+```
+
+### Transactions
+
+Use SQLAlchemy's transaction support for multi-statement operations:
+
+```python
+from sqlalchemy import create_engine, text
+from tamuno_sqlgen import SQLGenApi
+
+engine = create_engine("sqlite:///mydb.sqlite")
+api = SQLGenApi.from_file("orders.sqlg")
+
+# Atomic operation: archive old orders and delete originals
+with engine.begin() as conn:
+    # Copy shipped items to archive
+    copy_sql = api.copy_order_items(
+        target_table="archived_items",
+        status="shipped",
+        date_from=date(2023, 1, 1),
+        date_to=date(2023, 12, 31),
+    ).build_sql()
+    conn.execute(text(copy_sql))
+
+    # Delete the archived orders
+    delete_sql = api.delete_orders(
+        status="shipped",
+        before_date=date(2024, 1, 1),
+    ).build_sql()
+    conn.execute(text(delete_sql))
+
+    # Both statements commit together, or roll back on error
+```
+
+### Connection pooling and multiple databases
+
+```python
+from sqlalchemy import create_engine
+from tamuno_sqlgen import SQLGenApi, MySQLDialect, SQLDialect
+
+# PostgreSQL with ANSI dialect (default)
+pg_engine = create_engine("postgresql://user:pass@pghost/mydb", pool_size=10)
+pg_api = SQLGenApi.from_file("orders.sqlg")
+
+# MySQL with MySQL dialect (backslash escaping)
+mysql_engine = create_engine("mysql+pymysql://user:pass@myhost/mydb", pool_size=10)
+mysql_api = SQLGenApi.from_file("orders.sqlg", dialect=MySQLDialect())
+
+# Same template, different dialects
+with pg_engine.connect() as conn:
+    df_pg = pg_api.search_orders(customer_name="O'Brien").query(conn)
+    # Uses: customer_name='O''Brien'  (ANSI doubling)
+
+with mysql_engine.connect() as conn:
+    df_mysql = mysql_api.search_orders(customer_name="O'Brien").query(conn)
+    # Uses: customer_name='O\'Brien'  (MySQL backslash)
+```
+
+### Building a query service layer
+
+Combine tamuno-sqlgen templates with a SQLAlchemy-backed service class for clean separation of concerns:
+
+```python
+from datetime import date
+from sqlalchemy import create_engine, text
+from tamuno_sqlgen import SQLGenApi
+
+
+class OrderService:
+    """Service layer using tamuno-sqlgen for SQL and SQLAlchemy for execution."""
+
+    def __init__(self, engine, sqlg_path="orders.sqlg"):
+        self.engine = engine
+        self.api = SQLGenApi.from_file(sqlg_path)
+
+    def search(self, **filters):
+        """Search orders with any combination of filters."""
+        with self.engine.connect() as conn:
+            return self.api.search_orders(**filters).query(conn)
+
+    def get_report(self, **filters):
+        """Get sales report grouped by category."""
+        with self.engine.connect() as conn:
+            return self.api.sales_report(**filters).query(conn)
+
+    def get_products_page(self, page=1, page_size=20,
+                          sort_by="product_name", sort_dir="ASC", **filters):
+        """Get a paginated page of products."""
+        offset = (page - 1) * page_size
+        with self.engine.connect() as conn:
+            return self.api.paginated_products(
+                sort_column=sort_by,
+                sort_direction=sort_dir,
+                page_size=str(page_size),
+                page_offset=str(offset),
+                **filters,
+            ).query(conn)
+
+    def update_product(self, product_id, **fields):
+        """Update a product, setting only the provided fields."""
+        with self.engine.begin() as conn:
+            sql = self.api.update_product(product_id=product_id, **fields).build_sql()
+            conn.execute(text(sql))
+
+    def archive_orders(self, status, date_from, date_to):
+        """Archive orders in a single transaction."""
+        with self.engine.begin() as conn:
+            copy_sql = self.api.copy_order_items(
+                target_table="archived_items",
+                status=status,
+                date_from=date_from,
+                date_to=date_to,
+            ).build_sql()
+            conn.execute(text(copy_sql))
+
+            delete_sql = self.api.delete_orders(
+                status=status,
+                before_date=date_to,
+            ).build_sql()
+            conn.execute(text(delete_sql))
+
+
+# Usage
+engine = create_engine("sqlite:///shop.db")
+svc = OrderService(engine)
+
+# Search
+df = svc.search(customer_name="Alice", status="shipped")
+
+# Paginated product listing
+page1 = svc.get_products_page(page=1, sort_by="price", sort_dir="DESC")
+page2 = svc.get_products_page(page=2, sort_by="price", sort_dir="DESC",
+                               category="Electronics")
+
+# Partial update
+svc.update_product(42, price=29.99, stock=100)
+
+# Archive old shipped orders
+svc.archive_orders("shipped", date(2023, 1, 1), date(2023, 12, 31))
+```
+
+### Using with SQLAlchemy ORM sessions
+
+If your project uses SQLAlchemy ORM, you can still leverage tamuno-sqlgen for complex custom queries that are easier to express as templates:
+
+```python
+from sqlalchemy import text
+from sqlalchemy.orm import Session
+
+from tamuno_sqlgen import SQLGenApi
+
+api = SQLGenApi.from_file("orders.sqlg")
+
+# Within an ORM session
+with Session(engine) as session:
+    sql = api.sales_report(
+        status="shipped",
+        min_revenue=500.0,
+    ).build_sql()
+
+    # Execute raw SQL within the session
+    result = session.execute(text(sql))
+    for row in result:
+        print(f"{row[0]}: ${row[1]:.2f} revenue, {row[2]} orders")
+
+    # Modifications through tamuno-sqlgen
+    update_sql = api.update_product(
+        product_id=42,
+        price=24.99,
+    ).build_sql()
+    session.execute(text(update_sql))
+    session.commit()
+```
+
 ## Running Tests
 
 ```bash
