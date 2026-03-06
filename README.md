@@ -85,6 +85,8 @@ updateUser:=
 | `[...]` | Optional section - included only if its variables are provided |
 | `[AND]`, `[,]` | Combiner - included only if the preceding section was included |
 | `{}` | Stop-combiner - resets combiner state |
+| `\` | Escape symbol - to use $?#[]{} in your SQL |
+
 
 Optional sections can nest, and the engine handles the combiners (`AND`, `,`, `OR`, etc.) automatically so you never end up with a dangling `WHERE AND` or a trailing comma.
 
