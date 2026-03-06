@@ -355,3 +355,255 @@ class TestScanEdgeCases:
         assert "cat" in names
         assert "cnt" in names
         assert "total" in names
+
+
+# ==================== Escape character tests ====================
+
+
+class TestScanEscapeCharacter:
+    """Comprehensive tests for the backslash escape character."""
+
+    # --- Escaping each special character individually ---
+
+    def test_escape_dollar(self):
+        """\\$ produces literal $ instead of starting a variable."""
+        tokens = scan("SELECT \\$price FROM t")
+        assert all(t.type == TokenType.LITERAL for t in tokens)
+        combined = "".join(t.value for t in tokens)
+        assert "$price" in combined
+
+    def test_escape_hash(self):
+        """\\# produces literal # instead of starting a literal variable."""
+        tokens = scan("SELECT \\#channel FROM t")
+        assert all(t.type == TokenType.LITERAL for t in tokens)
+        combined = "".join(t.value for t in tokens)
+        assert "#channel" in combined
+
+    def test_escape_at(self):
+        """\\@ produces literal @ instead of starting a target variable."""
+        tokens = scan("SELECT \\@mention FROM t")
+        assert all(t.type == TokenType.LITERAL for t in tokens)
+        combined = "".join(t.value for t in tokens)
+        assert "@mention" in combined
+
+    def test_escape_question_mark(self):
+        """\\? produces literal ? instead of starting an option variable."""
+        tokens = scan("SELECT \\?placeholder FROM t")
+        assert all(t.type == TokenType.LITERAL for t in tokens)
+        combined = "".join(t.value for t in tokens)
+        assert "?placeholder" in combined
+
+    def test_escape_open_bracket(self):
+        """\\[ produces literal [ instead of opening an optional section."""
+        tokens = scan("SELECT \\[col\\] FROM t")
+        assert all(t.type == TokenType.LITERAL for t in tokens)
+        combined = "".join(t.value for t in tokens)
+        assert "[col]" in combined
+
+    def test_escape_close_bracket(self):
+        """\\] produces literal ] without requiring a matching open bracket."""
+        tokens = scan("SELECT x\\] FROM t")
+        assert all(t.type == TokenType.LITERAL for t in tokens)
+        combined = "".join(t.value for t in tokens)
+        assert "x]" in combined
+
+    def test_escape_open_brace(self):
+        """\\{ produces literal { instead of opening a required bracket."""
+        tokens = scan("SELECT \\{json\\} FROM t")
+        assert all(t.type == TokenType.LITERAL for t in tokens)
+        combined = "".join(t.value for t in tokens)
+        assert "{json}" in combined
+
+    def test_escape_close_brace(self):
+        """\\} produces literal } without requiring a matching open brace."""
+        tokens = scan("SELECT x\\} FROM t")
+        assert all(t.type == TokenType.LITERAL for t in tokens)
+        combined = "".join(t.value for t in tokens)
+        assert "x}" in combined
+
+    # --- Escaping the backslash itself ---
+
+    def test_escape_backslash(self):
+        """Double backslash produces a single literal backslash."""
+        tokens = scan("a\\\\b")
+        combined = "".join(t.value for t in tokens)
+        assert combined == "a\\b"
+
+    def test_double_backslash_followed_by_variable(self):
+        """\\\\$var: first \\\\ produces literal \\, then $var is a variable."""
+        tokens = scan("\\\\$var")
+        literals = [t for t in tokens if t.type == TokenType.LITERAL]
+        variables = [t for t in tokens if t.type == TokenType.ESCAPED_VAR]
+        assert any("\\" in t.value for t in literals)
+        assert len(variables) == 1
+        assert variables[0].value == "var"
+
+    def test_triple_backslash_before_dollar(self):
+        """\\\\\\$ = escaped backslash (\\\\) + escaped dollar (\\$) -> literal \\$."""
+        tokens = scan("\\\\\\$var")
+        assert all(t.type == TokenType.LITERAL for t in tokens)
+        combined = "".join(t.value for t in tokens)
+        assert combined == "\\$var"
+
+    # --- Escaping inside and outside quoted strings ---
+
+    def test_backslash_inside_single_quotes_preserved(self):
+        """Inside single quotes, backslash is preserved along with the next char."""
+        tokens = scan("WHERE x='a\\'s'")
+        combined = "".join(t.value for t in tokens)
+        # The backslash and the quote are both in the output
+        assert "a\\'" in combined
+
+    def test_backslash_inside_double_quotes_preserved(self):
+        """Inside double quotes, backslash is preserved along with the next char."""
+        tokens = scan('WHERE x="a\\\\"')
+        combined = "".join(t.value for t in tokens)
+        assert "a\\\\" in combined
+
+    def test_special_chars_inside_quotes_not_parsed(self):
+        """$, #, @, ?, [, ], {, } inside quotes are not interpreted."""
+        tokens = scan("WHERE x='$a #b @c ?d [e] {f}'")
+        var_tokens = [t for t in tokens if t.type not in (TokenType.LITERAL,)]
+        assert len(var_tokens) == 0
+        combined = "".join(t.value for t in tokens)
+        assert "$a #b @c ?d [e] {f}" in combined
+
+    # --- Edge cases ---
+
+    def test_trailing_backslash_ignored(self):
+        """A backslash at end of input with nothing after it is silently ignored."""
+        tokens = scan("test\\")
+        combined = "".join(t.value for t in tokens)
+        assert combined == "test"
+
+    def test_escape_non_special_char(self):
+        """Backslash before a non-special char consumes the backslash, keeps the char."""
+        tokens = scan("a\\nb")
+        combined = "".join(t.value for t in tokens)
+        assert combined == "anb"
+
+    def test_multiple_escapes_in_sequence(self):
+        """Multiple escaped special chars in a row."""
+        tokens = scan("\\$a \\#b \\@c \\?d")
+        assert all(t.type == TokenType.LITERAL for t in tokens)
+        combined = "".join(t.value for t in tokens)
+        assert combined == "$a #b @c ?d"
+
+    def test_escaped_chars_mixed_with_real_variables(self):
+        """Escaped special chars alongside real variables."""
+        tokens = scan("\\$literal $real \\#literal #real_lit")
+        escaped_vars = [t for t in tokens if t.type == TokenType.ESCAPED_VAR]
+        literal_vars = [t for t in tokens if t.type == TokenType.LITERAL_VAR]
+        assert len(escaped_vars) == 1
+        assert escaped_vars[0].value == "real"
+        assert len(literal_vars) == 1
+        assert literal_vars[0].value == "real_lit"
+        literals_combined = "".join(
+            t.value for t in tokens if t.type == TokenType.LITERAL
+        )
+        assert "$literal" in literals_combined
+        assert "#literal" in literals_combined
+
+    def test_escaped_brackets_do_not_affect_bracket_stack(self):
+        """Escaped brackets are not counted in bracket matching."""
+        # One real optional section, plus escaped brackets outside
+        tokens = scan("\\[ [x=$x] \\]")
+        opens = [t for t in tokens if t.type == TokenType.OPEN_BRACKET]
+        closes = [t for t in tokens if t.type == TokenType.CLOSE_BRACKET]
+        assert len(opens) == 1
+        assert len(closes) == 1
+        literals_combined = "".join(
+            t.value for t in tokens if t.type == TokenType.LITERAL
+        )
+        assert "[" in literals_combined
+        assert "]" in literals_combined
+
+    def test_escaped_braces_do_not_affect_bracket_stack(self):
+        """Escaped braces are not counted in bracket matching."""
+        tokens = scan("\\{ {} \\}")
+        req_opens = [t for t in tokens if t.type == TokenType.REQUIRED_OPEN_BRACKET]
+        req_closes = [t for t in tokens if t.type == TokenType.REQUIRED_CLOSE_BRACKET]
+        assert len(req_opens) == 1
+        assert len(req_closes) == 1
+
+    # --- SQL dialect use cases ---
+
+    def test_postgresql_positional_param(self):
+        """PostgreSQL \\$1 style positional parameters."""
+        tokens = scan("SELECT * FROM t WHERE id = \\$1")
+        assert all(t.type == TokenType.LITERAL for t in tokens)
+        combined = "".join(t.value for t in tokens)
+        assert "$1" in combined
+
+    def test_sqlserver_quoted_identifiers(self):
+        """SQL Server [schema].[table] style quoted identifiers."""
+        tokens = scan("SELECT * FROM \\[dbo\\].\\[users\\]")
+        assert all(t.type == TokenType.LITERAL for t in tokens)
+        combined = "".join(t.value for t in tokens)
+        assert "[dbo].[users]" in combined
+
+    def test_postgresql_jsonb_operators(self):
+        """PostgreSQL JSONB operators like @>, ?, ?|, ?&."""
+        tokens = scan(
+            "SELECT * FROM t WHERE data \\@> '{\"key\": 1}' AND data \\? 'key'"
+        )
+        combined = "".join(t.value for t in tokens)
+        assert "@>" in combined
+        assert "?" in combined
+
+    def test_mysql_user_variable(self):
+        """MySQL @rownum user variable."""
+        tokens = scan("SELECT \\@rownum := \\@rownum + 1 FROM t")
+        assert all(t.type == TokenType.LITERAL for t in tokens)
+        combined = "".join(t.value for t in tokens)
+        assert "@rownum := @rownum + 1" in combined
+
+
+# ==================== End-to-end escape tests (scanner + builder) ====================
+
+
+class TestEscapeEndToEnd:
+    """End-to-end tests verifying escaped chars flow through to built SQL."""
+
+    def test_escaped_dollar_in_output(self):
+        from tamuno_sqlgen import SQLGenApi
+
+        api = SQLGenApi("test:= SELECT \\$literal FROM t WHERE x=$x;")
+        sql = api.test(x="hello").build_sql()
+        assert "$literal" in sql
+        assert "'hello'" in sql
+
+    def test_escaped_brackets_in_output(self):
+        from tamuno_sqlgen import SQLGenApi
+
+        api = SQLGenApi("test:= SELECT \\[col\\] FROM t;")
+        sql = api.test().build_sql()
+        assert "[col]" in sql
+
+    def test_escaped_hash_in_output(self):
+        from tamuno_sqlgen import SQLGenApi
+
+        api = SQLGenApi("test:= SELECT \\#comment FROM t;")
+        sql = api.test().build_sql()
+        assert "#comment" in sql
+
+    def test_escaped_at_in_output(self):
+        from tamuno_sqlgen import SQLGenApi
+
+        api = SQLGenApi("test:= SELECT \\@var FROM t;")
+        sql = api.test().build_sql()
+        assert "@var" in sql
+
+    def test_escaped_backslash_in_output(self):
+        from tamuno_sqlgen import SQLGenApi
+
+        api = SQLGenApi("test:= SELECT \\\\ FROM t;")
+        sql = api.test().build_sql()
+        assert "\\" in sql
+
+    def test_escaped_backslash_before_variable_in_output(self):
+        from tamuno_sqlgen import SQLGenApi
+
+        api = SQLGenApi("test:= SELECT \\\\$x FROM t;")
+        sql = api.test(x="val").build_sql()
+        assert "\\'val'" in sql

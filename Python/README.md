@@ -175,11 +175,82 @@ An optional section with no variables and no sub-sections (e.g. `[AND]`, `[,]`) 
 [x=$x] [AND] {} [y=$y:int]
 ```
 
-### Escaping
+### Escaping special characters
 
-Use `\` to escape special characters (`[`, `]`, `$`, `#`, `@`, `?`, `{`, `}`).
+The characters `[`, `]`, `{`, `}`, `$`, `#`, `@`, and `?` have special meaning in the template DSL. To include them as literal text in the generated SQL, prefix them with a backslash (`\`).
 
-No parsing is done inside string literals `'...'` or `"..."`.
+```sql
+literalChars:=
+    SELECT \$price, \#channel, \@mention, \?placeholder,
+           \[array_access\], \{json_path\}
+        FROM t;
+```
+
+The generated SQL contains the characters verbatim:
+
+```
+SELECT $price, #channel, @mention, ?placeholder,
+       [array_access], {json_path}
+    FROM t
+```
+
+This is useful when your target SQL dialect requires these characters as part of the query itself. For example:
+
+- **PostgreSQL** uses `$1`, `$2` for prepared-statement positional parameters.
+- **MySQL** uses `#` for comments and `@` for user-defined variables (`@rownum`).
+- **SQL Server** uses `[schema].[table]` for quoted identifiers.
+- **PostgreSQL JSONB** uses `@>`, `?`, `?|`, `?&` as operators.
+
+#### Escaping the backslash itself
+
+Since `\` is the escape character, you need to double it to produce a literal backslash in the output:
+
+```sql
+backslashExample:=
+    SELECT * FROM t WHERE path LIKE 'C:\\\\Users\\\\%';
+```
+
+Note: inside quoted strings (`'...'` or `"..."`), the template engine does **not** interpret special characters, so `$`, `#`, `@`, `?`, `[`, `]`, `{`, `}` are passed through as-is. However, `\` is still processed inside quotes (and preserved together with the following character), so a `\\` inside a quoted string produces `\\` in the output - which is typically what you want for SQL string literals.
+
+#### Combining escaped backslash with a variable
+
+A double backslash produces a literal `\`. If a variable marker follows immediately after, it is still recognized as a variable:
+
+```sql
+pathQuery:=
+    SELECT * FROM t WHERE path=\\$user_path;
+```
+
+```python
+api.path_query(user_path="docs").build_sql()
+# → SELECT * FROM t WHERE path=\'docs'
+```
+
+#### Summary
+
+| Template | Output |
+|----------|--------|
+| `\$x` | `$x` (literal dollar, not a variable) |
+| `\#x` | `#x` (literal hash) |
+| `\@x` | `@x` (literal at-sign) |
+| `\?x` | `?x` (literal question mark) |
+| `\[` | `[` (literal bracket) |
+| `\]` | `]` (literal bracket) |
+| `\{` | `{` (literal brace) |
+| `\}` | `}` (literal brace) |
+| `\\` | `\` (literal backslash) |
+| `\\$x` | `\` followed by the value of variable `$x` |
+
+#### No parsing inside string literals
+
+The template engine does not interpret special characters inside SQL string literals delimited by single quotes (`'...'`) or double quotes (`"..."`). This means you can safely write:
+
+```sql
+example:=
+    SELECT * FROM t WHERE label='$not_a_var [not_a_bracket]';
+```
+
+The `$not_a_var` and `[not_a_bracket]` are **not** parsed - they appear verbatim in the output.
 
 ## Python API Reference
 
